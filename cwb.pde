@@ -1,7 +1,7 @@
-//import processing.video.*;
+import processing.video.*;
 
 PImage src;
-//Movie src;
+Movie srcv;
 PImage out;
 
 int wRadius = 15;
@@ -18,18 +18,22 @@ boolean rendering = false;
 
 int frameRendered = 0;
 int frames = 0;
+int renderStart = 0;
 
-String sourceDir = "D:/Projects/CWB Processing/cwb/src";
-String outDir = "D:/Projects/CWB Processing/cwb/out1";
+
+int threads = 16;
+int finished = 0;
+
+String sourceDir = "R:/src";
+//String sourceDir = "D:/Projects/CWB Processing/cwb/src";
+String outDir = "R:/out1";
 
 java.io.File folder = new java.io.File(dataPath(sourceDir));
 String filenames[] = folder.list();
 
 void settings() {
   src = loadImage(sourceDir + "/" + filenames[0]);
-  size(src.width, src.height);
-  
-  size(1920, 1080);
+  size(src.width, src.height, P2D);
   
   println("Sketch setting processed");
 }
@@ -37,11 +41,11 @@ void settings() {
 void setup() {
   println("Sketch setup started");
 
-  out = createGraphics(width, height);
+  out = createGraphics(width, height, P2D);
   
+  //srcv = new Movie(this, "D:/Projects/CWB Processing/cwb/test.mov");
   //frameRate(25);
-  //src = new Movie(this, "D:/Projects/CWB Processing/cwb/test.mov");
-  //src.loop();
+  //srcv.loop();
   
   frames = filenames.length;
 
@@ -58,7 +62,13 @@ void setup() {
 
 void draw() {
   if(!rendering){
-    //if(src.available()) src.read();
+    //if(!srcv.available()) return;
+    //if(srcv.available()) srcv.read();
+    //PImage f = srcv.get();
+    //f.loadPixels();
+    //println(f.pixels.length);
+    
+    //src = f;
     src.loadPixels();
     
     color srcWhite = sampleArea(src, wPickerP[0], wPickerP[1], wRadius);
@@ -121,7 +131,7 @@ void draw() {
     push();
       noStroke();
       fill(0xffFFFF00);
-      rect(0,0,width*frameRendered/frames,height);
+      rect(0,0,width*(float)frameRendered/(float)frames,height);
     pop();
     
     push();
@@ -131,48 +141,79 @@ void draw() {
     pop();
     
     text("RENDERING", 50, 60);
-    text("Progress: " + nf(frameRendered) + "/" + nf(frames) + "frames (" + nf((frameRendered/frames)*100) + "% done)", 50, 75);
+    text("Progress: " + nf(frameRendered) + "/" + nf(frames) + "frames (" + nf(((float)frameRendered/(float)frames)*100) + "% done)", 50, 75);
+    
+    text("Time elapsed: " + (millis()-renderStart)/1000 + "seconds", 50, 90);
     
     image(out, 20, 160, width/3, height/3);
   
   }
 }
 
-void render(){
-  rendering = true;
+void startRender(){
+  println("Starting render process");
+  renderStart = millis();
+  frameRendered = 0;
   frames = filenames.length;
+  int t = threads < frames ? threads : frames;
   
-  for(int i = 0; i<frames; i++){
-    if(keyPressed && keyCode == 9) break; // If TAB was pressed, abort
+  for(int i = 0; i<t; i++){
+    new RenderThread(i*frames/t, (i+1)*frames/t).start();
+    println("Starting thread " + i + " rendering frames " + i*frames/t + " thru " + (i+1)*frames/t);
+  }
+  
+  noLoop();
+  thread("onceASecond");
+}
+
+public class RenderThread extends Thread{
+  int s;
+  int e;
+  public RenderThread(int start, int end){
+    this.s = start;
+    this.e = end;
+  }
+  
+  public void run(){
+    render(s,e);
+  }
+}
+
+void render(int start, int end){
+  rendering = true;
+  
+  for(int i = start; i<end; i++){
+    if(!rendering) break;  // Stop the render if other thread have stopped
+    if(keyPressed && keyCode == 9) {
+      rendering = false;
+      break; // If TAB was pressed, abort
+    }
     
-    frameRendered = i;
+    frameRendered++;
     out = corrector(loadImage(sourceDir + "/" + filenames[i]), wCorrection, bCorrection);
     out.save(outDir + "/" + filenames[i]);
   }
   
-  rendering = false;
+  if(++finished == threads){
+    rendering = false; // The last thread stops the render
+    println("Finished render after " + (millis()-renderStart)/1000 + "seconds");
+    loop();
+  }
 }
-
-/*
-PImage correct(Movie srcMov){
-  srcMov.loadPixels();
-  return correct(srcMov.get());
-}
-*/
 
 PImage corrector(PImage src, boolean wC, boolean bC){
-  colorMode(RGB, 255, 255, 255, 255);
+  //colorMode(RGB, 255, 255, 255, 255);
   PImage o = createImage(src.width, src.height, ARGB);
   
   o.loadPixels();
   src.loadPixels();
-  o.pixels = src.pixels.clone();
+  o.pixels = src.pixels.clone(); // Clone the pixel array into a new image which we can modify without worriing about destroing the source.
   
   color srcWhite = wC ? sampleArea(src, wPickerP[0], wPickerP[1], wRadius) : 0xffFFFFFF;
   color srcBlack = bC ? sampleArea(src, bPickerP[0], bPickerP[1], bRadius) : 0xff000000;
   
   //out.beginDraw();
-  float wLuma = wC ? (red(srcWhite) + green(srcWhite) + blue(srcWhite)) / 3f : 1;
+  float wLuma = wC ? ((srcWhite>>16&0xFF) + (srcWhite>>8&0xFF) + (srcWhite&0xFF)) / 3f : 1;
   float bLuma = bC ? (red(srcBlack) + green(srcBlack) + blue(srcBlack)) / 3f : 0;
   float wFac[] = new float[3];
   float bFac[] = new float[3];
@@ -181,9 +222,8 @@ PImage corrector(PImage src, boolean wC, boolean bC){
     if(bC) bFac[i] = (255-bLuma) / (255-((srcBlack >> 8*(2-i))&0xFF)) - 1;
   }
   
-  printArray(bFac);
-  
-  for(int p = 0; p < o.pixels.length; p++){
+  int count = o.pixels.length-1;
+  for(int p = 0; p++ < count;){
     color c = o.pixels[p];
     int r = c >> 16 & 0xFF, g = c >> 8 & 0xFF, b = c >> 0 & 0xFF, a = c & 0xff000000; // Separate channels (and shift the color channels to LSB)
     
@@ -195,14 +235,15 @@ PImage corrector(PImage src, boolean wC, boolean bC){
     g = brick255(g + dg - (dr+db)/4) <<8  & 0x0000FF00; // Colorcombine the channels and shift the color back from LSB to b9 - b16
     b = brick255(b + db - (dr+dg)/4)      & 0x000000FF; // Colorcombine the channels and shift the color back from LSB to b1 - b8
     
-    o.pixels[p] = floor(r+g+b+a);
+    o.pixels[p] = r+g+b+a;
     //println(hex(o.pixels[p]));
   }
   o.updatePixels();
+  
   return o;
 }
 
-int brick255(float n){
+int brick255(float n){ // Brickwall color limiter to prevent 8bit overflows and simmilar shit
   return n > 255 ? 255 : (n < 0 ? 0 : floor(n));
 }
 
@@ -213,7 +254,16 @@ void periodicUpdate(){
   }
 }
 
+void onceASecond(){
+  while(rendering){
+    redraw();
+    delay(1000);
+  }
+}
+
 void mouseDragged(MouseEvent e) {
+  if(rendering) return;
+  
   if (abs(mouseX - wPickerP[0]) < (wRadius + 5) && abs(mouseY - wPickerP[1]) < (wRadius + 5) && wPickerP[1]-wRadius > 0) {
     wPickerP[0] += e.getX() - wPickerP[0];
     wPickerP[1] += e.getY() - wPickerP[1];
@@ -234,6 +284,7 @@ void mouseReleased(){
 }
 
 void mouseWheel(MouseEvent e) {
+  if(rendering) return;
   if(!keyPressed){
     if (wRadius >= 1) wRadius -= e.getCount();
     if (wRadius == 0) wRadius++;
@@ -244,6 +295,8 @@ void mouseWheel(MouseEvent e) {
 }
 
 void mousePressed(MouseEvent e) {
+  if(rendering) return;
+  
   thread("periodicUpdate");
   
   if (!keyPressed && e.getButton() == RIGHT && mouseY < height-50) {
@@ -263,7 +316,7 @@ void keyPressed(KeyEvent e) {
   if(key == 'w') wCorrect();    // w
   if(key == 'b') bCorrect();    // b
   if(key == ' ') correct();     // SPACE
-  if(keyCode == 123) thread("render");        // F12
+  if(keyCode == 123) startRender();        // F12
 }
 
 void correct(){
@@ -279,25 +332,26 @@ void bCorrect(){
   bCorrection = !bCorrection;
 }
 
-color sampleArea(PImage sample, int x, int y, int r) {
-  sample.loadPixels();
+color sampleArea(PImage sample, int x, int y, int r) { // Sample a part of an image and return the average color over that area
+  //colorMode(ARGB,256,256,256,256);
+  sample.loadPixels();    // Load the pixels into a buffer
 
-  int rounds = (2*r)*(2*r);
-  //println(rounds);
-  long sum[] = new long[3];
-
-  for (int i = x-r; i <= x+r; i++) for (int j = y-r; j <= y+r; j++) {
-    int p = j*sample.width + i;
-    sum[0] += red(sample.pixels[p]); //<>//
-    sum[1] += green(sample.pixels[p]);
-    sum[2] += blue(sample.pixels[p]);
-
+  int rounds = (2*r)*(2*r);  // Determite the final number of pixels in the sampled area
+  long sum[] = new long[3];  // Prepare an array into which we'll sum all the pixels
+  
+  int endX = x+r-1;
+  int endY = y+r-1;
+  for (int i = x-r; i++ < endX; ) for (int j = y-r; j++ < endY; ) {  // For every pixel in that area
+    int p = j*sample.width + i;        // Calc the index of the current pixel
+    sum[0] += (sample.pixels[p]>>16)&0xFF;  // Add the red channel //<>//
+    sum[1] += (sample.pixels[p]>>8 )&0xFF;  // Add the green channel
+    sum[2] += (sample.pixels[p]    )&0xFF;  // Add the blue channel
     //sample.pixels[p] = color(0xFFFF0000); // Test for showing the actual pixels sampled in red
   }
-
   //sample.updatePixels(); // Test for showing the actual pixels sampled in red
 
-  for (int i = 0; i < 3; i++) sum[i] = sum[i]/rounds;
+  for (int i = 0; i < 3; i++) sum[i] /= rounds; // Devide all the sums by the total amount of pixel = average
+  //println((sum[0]<<8&0x0000FF00));
 
-  return color(sum[0], sum[1], sum[2]);
+  return (int)0xff000000 + (int)(sum[0]<<16&0x00FF0000) + (int)(sum[1]<<8&0x0000FF00) + (int)(sum[2]&0x000000FF); // Composit the color back into a single int and return it.
 }
